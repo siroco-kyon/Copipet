@@ -6,7 +6,10 @@
     <LangVersion>7.3</LangVersion>
     <RootNamespace>Copipet</RootNamespace>
     <AssemblyName>Copipet</AssemblyName>
-    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- アイコンの選択：showa（昭和の特売シール・既定）／bubble（青い吹き出し・初代）
+         変えるには、ここを書き換えるか、dotnet build -p:CopipetIcon=bubble のように指定する -->
+    <CopipetIcon Condition="'$(CopipetIcon)' == ''">showa</CopipetIcon>
+    <ApplicationIcon>..\..\assets\icons\$(CopipetIcon).ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Version>1.0.0</Version>
@@ -41,5 +44,13 @@
     <Compile Update="Forms\TabNameForm.cs" SubType="Form" />
     <Compile Update="Forms\TabNameForm.Designer.cs" DependentUpon="TabNameForm.cs" />
   </ItemGroup>
+
+  <!-- アイコンの指定が変わったら exe を作り直す（指定を記録したファイルを、変わったときだけ更新してコンパイルの入力にする） -->
+  <Target Name="CopipetIconStamp" BeforeTargets="CoreCompile">
+    <WriteLinesToFile File="$(IntermediateOutputPath)copipet.icon.txt" Lines="$(CopipetIcon)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <CustomAdditionalCompileInputs Include="$(IntermediateOutputPath)copipet.icon.txt" />
+    </ItemGroup>
+  </Target>
 
 </Project>

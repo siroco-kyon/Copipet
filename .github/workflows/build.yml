@@ -28,6 +28,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item src/Copipet/bin/Release/net48/Copipet.exe dist/
+          dotnet build Copipet.sln -c Release -p:CopipetIcon=bubble
+          New-Item -ItemType Directory -Force dist/bubble | Out-Null
+          Copy-Item src/Copipet/bin/Release/net48/Copipet.exe dist/bubble/
           Copy-Item README.md dist/
           Compress-Archive -Path dist/* -DestinationPath Copipet.zip -Force
 

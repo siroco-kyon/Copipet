@@ -58,6 +58,23 @@ dotnet build Copipet.sln -c Release
 
 GitHub Actions でも Windows 上で自動ビルドし、成果物（Copipet.exe）をダウンロードできます。`v1.0.0` のようなタグを付けてプッシュすると、Release に zip を添付します。
 
+## アイコンの切り替え
+
+アイコンは2種類あり、ビルド時に選べます。
+
+| 名前 | デザイン |
+|---|---|
+| `showa`（既定） | 昭和の特売シール（黄色のギザギザに赤文字「コピペ」） |
+| `bubble` | 青い吹き出しに「コ」（初代） |
+
+```
+dotnet build Copipet.sln -c Release -p:CopipetIcon=bubble
+```
+
+Visual Studio でビルドする場合は、`src/Copipet/Copipet.csproj` の `<CopipetIcon ...>showa</CopipetIcon>` を `bubble` に書き換えます。
+見本は `assets/icons/*_preview.png`、作り直すときは `python3 tools/make_icon.py all` です。
+GitHub Actions の成果物には、既定（showa）の `Copipet.exe` と、`bubble/Copipet.exe` の両方が入ります。
+
 ## フォルダ構成
 
 ```
@@ -71,7 +88,7 @@ src/Copipet/
 ├─ Forms/MainForm.cs          … トップ画面
 ├─ Forms/ItemEditForm.cs      … コピー内容の編集画面
 ├─ Forms/TabNameForm.cs       … タブ名の変更画面
-└─ app.ico                    … アイコン（tools/make_icon.py で生成）
+assets/icons/                 … アイコン（showa.ico／bubble.ico、tools/make_icon.py で生成）
 docs/SPEC.md                  … 仕様書
 docs/TEST_CHECKLIST.md        … テスト項目
 ```
