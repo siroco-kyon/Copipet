@@ -1,0 +1,584 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Windows.Forms;
+using Copipet.Models;
+using Copipet.Services;
+
+namespace Copipet.Forms
+{
+    /// <summary>トップ画面。タブ（最大8つ）と、タブごとに10個のコピーボタンを表示する。</summary>
+    public partial class MainForm : Form
+    {
+        private const int TabColumns = 4;
+        private const int TabRows = 2;
+        private const int StatusDisplayMs = 2000;
+        private const int PreviewLength = 100;
+
+        private readonly DataStore _store;
+        private readonly AppData _data;
+        private readonly string _startupNotice;
+        private readonly Button[] _copyButtons;
+        private readonly List<Button> _tabButtons = new List<Button>();
+        private Button _addTabButton;
+        private ContextMenuStrip _tabMenu;
+        private ContextMenuStrip _settingsMenu;
+        private ToolStripMenuItem _menuRename, _menuMoveLeft, _menuMoveRight, _menuDelete;
+        private ToolStripMenuItem _menuThemeAuto, _menuThemeLight, _menuThemeDark, _menuTopMost;
+        private Timer _statusTimer;
+        private Font _tabFont;
+        private Font _tabFontBold;
+        private Palette _palette;
+        private int _currentTab;
+        private int _menuTabIndex = -1;
+        private int _savedLastTab;
+
+        internal MainForm(DataStore store, AppData data, string startupNotice)
+        {
+            InitializeComponent();
+
+            _store = store;
+            _data = data;
+            _startupNotice = startupNotice;
+            _currentTab = data.LastTab;
+            _savedLastTab = data.LastTab;
+
+            _copyButtons = new[]
+            {
+                copyButton1, copyButton2, copyButton3, copyButton4, copyButton5,
+                copyButton6, copyButton7, copyButton8, copyButton9, copyButton10
+            };
+            for (int i = 0; i < _copyButtons.Length; i++)
+            {
+                _copyButtons[i].Tag = i;
+                _copyButtons[i].Click += OnCopyButtonClick;
+                _copyButtons[i].MouseUp += OnCopyButtonMouseUp;
+            }
+
+            try
+            {
+                Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            }
+            catch (Exception)
+            {
+                // アイコンが取れなくても動作に影響はない
+            }
+
+            toolTip.Draw += OnToolTipDraw;
+            toolTip.Popup += OnToolTipPopup;
+            panelTabs.Layout += (s, e) => LayoutTabButtons();
+            buttonSettings.Click += (s, e) => _settingsMenu.Show(buttonSettings, new Point(buttonSettings.Width, 0), ToolStripDropDownDirection.AboveLeft);
+
+            _tabFont = new Font(Font.FontFamily, 9F, FontStyle.Regular);
+            _tabFontBold = new Font(Font.FontFamily, 9F, FontStyle.Bold);
+            components.Add(new FontHolder(_tabFont));
+            components.Add(new FontHolder(_tabFontBold));
+
+            BuildMenus();
+            TopMost = _data.TopMost;
+            _palette = ThemeHelper.Resolve(_data.Theme);
+            RebuildTabButtons();
+            ApplyTheme();
+            ShowTab(_currentTab);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ThemeHelper.ApplyTitleBar(this, _palette.IsDark);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (_startupNotice != null)
+            {
+                MessageBox.Show(this, _startupNotice, "コピペット", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // 最後に選んでいたタブを覚えておく（変わっていなければ書き込まない）
+            if (_data.LastTab != _savedLastTab)
+            {
+                try
+                {
+                    _store.Save(_data);
+                }
+                catch (Exception)
+                {
+                    // 終了時はタブ位置が保存できなくても支障はない
+                }
+            }
+            base.OnFormClosing(e);
+        }
+
+        // ------------------------------------------------------------------
+        // タブ
+        // ------------------------------------------------------------------
+
+        private void RebuildTabButtons()
+        {
+            panelTabs.SuspendLayout();
+            foreach (Button b in _tabButtons)
+            {
+                toolTip.SetToolTip(b, null);
+                panelTabs.Controls.Remove(b);
+                b.Dispose();
+            }
+            _tabButtons.Clear();
+
+            for (int i = 0; i < _data.Tabs.Count; i++)
+            {
+                var button = new Button
+                {
+                    Tag = i,
+                    Text = _data.Tabs[i].Name,
+                    AutoEllipsis = true,
+                    UseMnemonic = false,
+                    FlatStyle = FlatStyle.Flat,
+                    UseVisualStyleBackColor = false,
+                    TabStop = false,
+                };
+                button.FlatAppearance.BorderSize = 0;
+                toolTip.SetToolTip(button, _data.Tabs[i].Name);
+                button.Click += OnTabButtonClick;
+                button.MouseUp += OnTabButtonMouseUp;
+                _tabButtons.Add(button);
+                panelTabs.Controls.Add(button);
+            }
+
+            if (_addTabButton == null)
+            {
+                _addTabButton = new Button
+                {
+                    Text = "＋",
+                    FlatStyle = FlatStyle.Flat,
+                    UseVisualStyleBackColor = false,
+                    TabStop = false,
+                };
+                _addTabButton.FlatAppearance.BorderSize = 1;
+                _addTabButton.Click += (s, e) => AddTab();
+                toolTip.SetToolTip(_addTabButton, "タブを追加（最大" + AppData.MaxTabs + "つ）");
+                panelTabs.Controls.Add(_addTabButton);
+            }
+            _addTabButton.Visible = _data.Tabs.Count < AppData.MaxTabs;
+
+            panelTabs.ResumeLayout(false);
+            LayoutTabButtons();
+            UpdateTabColors();
+        }
+
+        /// <summary>タブを4つずつ2段に並べる。panelTabs の大きさから計算するので高DPIでも崩れない。</summary>
+        private void LayoutTabButtons()
+        {
+            if (_tabButtons.Count == 0) return;
+            int gap = (int)Math.Round(6 * UiScale);
+            int width = (panelTabs.ClientSize.Width - gap * (TabColumns - 1)) / TabColumns;
+            int height = (panelTabs.ClientSize.Height - gap * (TabRows - 1)) / TabRows;
+
+            for (int slot = 0; slot <= _tabButtons.Count && slot < TabColumns * TabRows; slot++)
+            {
+                Button target = slot < _tabButtons.Count ? _tabButtons[slot] : _addTabButton;
+                if (target == null) continue;
+                int col = slot % TabColumns;
+                int row = slot / TabColumns;
+                target.SetBounds(col * (width + gap), row * (height + gap), width, height);
+            }
+        }
+
+        private void UpdateTabColors()
+        {
+            Palette p = _palette;
+            for (int i = 0; i < _tabButtons.Count; i++)
+            {
+                Button b = _tabButtons[i];
+                bool selected = i == _currentTab;
+                Color back = selected ? p.TabSelectedBack : p.TabBack;
+                b.BackColor = back;
+                b.ForeColor = selected ? p.TabSelectedText : p.TabText;
+                b.Font = selected ? _tabFontBold : _tabFont;
+                Color hoverTarget = p.IsDark ? Color.White : Color.Black;
+                b.FlatAppearance.MouseOverBackColor = selected ? back : Palette.Blend(back, hoverTarget, 0.12);
+                b.FlatAppearance.MouseDownBackColor = Palette.Blend(back, hoverTarget, 0.2);
+            }
+            if (_addTabButton != null)
+            {
+                _addTabButton.BackColor = p.Back;
+                _addTabButton.ForeColor = p.SubText;
+                _addTabButton.FlatAppearance.BorderColor = p.Border;
+                _addTabButton.FlatAppearance.MouseOverBackColor = p.ButtonHover;
+                _addTabButton.FlatAppearance.MouseDownBackColor = p.ButtonPressed;
+            }
+        }
+
+        private void ShowTab(int index)
+        {
+            if (index < 0) index = 0;
+            if (index >= _data.Tabs.Count) index = _data.Tabs.Count - 1;
+            _currentTab = index;
+            _data.LastTab = index;
+            UpdateTabColors();
+            UpdateCopyButtons();
+        }
+
+        private void OnTabButtonClick(object sender, EventArgs e)
+        {
+            ShowTab((int)((Button)sender).Tag);
+        }
+
+        private void OnTabButtonMouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right) return;
+            var button = (Button)sender;
+            _menuTabIndex = (int)button.Tag;
+            _tabMenu.Show(button, e.Location);
+        }
+
+        private void AddTab()
+        {
+            if (_data.Tabs.Count >= AppData.MaxTabs) return;
+
+            var used = new HashSet<string>();
+            foreach (TabData t in _data.Tabs) used.Add(t.Name);
+            int n = _data.Tabs.Count;
+            string name = AppData.DefaultTabName(n);
+            while (used.Contains(name)) name = AppData.DefaultTabName(++n);
+
+            _data.Tabs.Add(TabData.Create(name));
+            RebuildTabButtons();
+            ShowTab(_data.Tabs.Count - 1);
+            SaveData();
+        }
+
+        private void RenameTab(int index)
+        {
+            TabData tab = _data.Tabs[index];
+            using (var form = new TabNameForm(tab.Name, _palette))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK) return;
+                string name = form.TabName;
+                tab.Name = name.Length == 0 ? AppData.DefaultTabName(index) : name;
+            }
+            _tabButtons[index].Text = tab.Name;
+            toolTip.SetToolTip(_tabButtons[index], tab.Name);
+            SaveData();
+        }
+
+        private void MoveTab(int index, int offset)
+        {
+            int target = index + offset;
+            if (target < 0 || target >= _data.Tabs.Count) return;
+
+            TabData tmp = _data.Tabs[index];
+            _data.Tabs[index] = _data.Tabs[target];
+            _data.Tabs[target] = tmp;
+
+            // 選択中のタブを動かしたときは、選択も一緒に動かす
+            if (_currentTab == index) _currentTab = target;
+            else if (_currentTab == target) _currentTab = index;
+
+            for (int i = 0; i < _tabButtons.Count; i++)
+            {
+                _tabButtons[i].Text = _data.Tabs[i].Name;
+                toolTip.SetToolTip(_tabButtons[i], _data.Tabs[i].Name);
+            }
+            ShowTab(_currentTab);
+            SaveData();
+        }
+
+        private void DeleteTab(int index)
+        {
+            if (_data.Tabs.Count <= 1) return;
+            TabData tab = _data.Tabs[index];
+            int registered = tab.RegisteredCount;
+
+            string message = registered > 0
+                ? "タブ「" + tab.Name + "」を削除します。\n登録済みの " + registered + " 件も消えます。よろしいですか？"
+                : "タブ「" + tab.Name + "」を削除します。よろしいですか？";
+            if (MessageBox.Show(this, message, "タブの削除", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            _data.Tabs.RemoveAt(index);
+            if (_currentTab > index || _currentTab >= _data.Tabs.Count) _currentTab--;
+            if (_currentTab < 0) _currentTab = 0;
+
+            RebuildTabButtons();
+            ShowTab(_currentTab);
+            SaveData();
+        }
+
+        // ------------------------------------------------------------------
+        // コピーボタン
+        // ------------------------------------------------------------------
+
+        private void UpdateCopyButtons()
+        {
+            TabData tab = _data.Tabs[_currentTab];
+            for (int i = 0; i < _copyButtons.Length; i++)
+            {
+                ItemData item = tab.Items[i];
+                Button b = _copyButtons[i];
+                if (item.IsEmpty)
+                {
+                    b.Text = item.Title.Length > 0 ? item.Title : "（未登録）";
+                    b.ForeColor = _palette.EmptyText;
+                    toolTip.SetToolTip(b, "クリックして登録");
+                }
+                else
+                {
+                    b.Text = item.Title.Length > 0 ? item.Title : "（無題）";
+                    b.ForeColor = _palette.Text;
+                    toolTip.SetToolTip(b, MakePreview(item.Content));
+                }
+            }
+        }
+
+        private static string MakePreview(string content)
+        {
+            string text = content.Replace("\r\n", "\n").Replace('\r', '\n');
+            if (text.Length > PreviewLength) text = text.Substring(0, PreviewLength) + "…";
+            return text;
+        }
+
+        private void OnCopyButtonClick(object sender, EventArgs e)
+        {
+            int index = (int)((Button)sender).Tag;
+            ItemData item = _data.Tabs[_currentTab].Items[index];
+
+            if (item.IsEmpty)
+            {
+                OpenItemEditor(index);
+                return;
+            }
+
+            string label = item.Title.Length > 0 ? item.Title : "（無題）";
+            if (ClipboardHelper.TrySetText(item.Content))
+            {
+                ShowStatus("コピーしました：" + label);
+            }
+            else
+            {
+                ShowStatus("コピーできませんでした（他のアプリがクリップボードを使用中）");
+            }
+        }
+
+        private void OnCopyButtonMouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right) return;
+            OpenItemEditor((int)((Button)sender).Tag);
+        }
+
+        private void OpenItemEditor(int index)
+        {
+            TabData tab = _data.Tabs[_currentTab];
+            ItemData item = tab.Items[index];
+            string caption = "コピー内容の編集 - " + tab.Name + " No." + (index + 1);
+
+            using (var form = new ItemEditForm(caption, item.Title, item.Content, _palette))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK) return;
+                item.Title = form.ItemTitle;
+                item.Content = form.ItemContent;
+            }
+            UpdateCopyButtons();
+            SaveData();
+        }
+
+        // ------------------------------------------------------------------
+        // メニュー・テーマ・設定
+        // ------------------------------------------------------------------
+
+        private void BuildMenus()
+        {
+            _menuRename = new ToolStripMenuItem("名前を変更", null, (s, e) => RenameTab(_menuTabIndex));
+            _menuMoveLeft = new ToolStripMenuItem("左へ移動", null, (s, e) => MoveTab(_menuTabIndex, -1));
+            _menuMoveRight = new ToolStripMenuItem("右へ移動", null, (s, e) => MoveTab(_menuTabIndex, +1));
+            _menuDelete = new ToolStripMenuItem("削除", null, (s, e) => DeleteTab(_menuTabIndex));
+            _tabMenu = new ContextMenuStrip(components);
+            _tabMenu.Items.AddRange(new ToolStripItem[] { _menuRename, _menuMoveLeft, _menuMoveRight, new ToolStripSeparator(), _menuDelete });
+            _tabMenu.Opening += (s, e) =>
+            {
+                _menuMoveLeft.Enabled = _menuTabIndex > 0;
+                _menuMoveRight.Enabled = _menuTabIndex < _data.Tabs.Count - 1;
+                _menuDelete.Enabled = _data.Tabs.Count > 1;
+            };
+
+            _menuThemeAuto = new ToolStripMenuItem("Windowsの設定に合わせる", null, (s, e) => ChangeTheme(AppData.ThemeAuto));
+            _menuThemeLight = new ToolStripMenuItem("ライト", null, (s, e) => ChangeTheme(AppData.ThemeLight));
+            _menuThemeDark = new ToolStripMenuItem("ダーク", null, (s, e) => ChangeTheme(AppData.ThemeDark));
+            var themeMenu = new ToolStripMenuItem("テーマ");
+            themeMenu.DropDownItems.AddRange(new ToolStripItem[] { _menuThemeAuto, _menuThemeLight, _menuThemeDark });
+            _menuTopMost = new ToolStripMenuItem("常に最前面に表示", null, (s, e) => ToggleTopMost());
+            var openFolder = new ToolStripMenuItem("データフォルダを開く", null, (s, e) => OpenDataFolder());
+
+            _settingsMenu = new ContextMenuStrip(components);
+            _settingsMenu.Items.AddRange(new ToolStripItem[] { themeMenu, _menuTopMost, new ToolStripSeparator(), openFolder });
+            _settingsMenu.Opening += (s, e) =>
+            {
+                _menuThemeAuto.Checked = _data.Theme == AppData.ThemeAuto;
+                _menuThemeLight.Checked = _data.Theme == AppData.ThemeLight;
+                _menuThemeDark.Checked = _data.Theme == AppData.ThemeDark;
+                _menuTopMost.Checked = _data.TopMost;
+            };
+        }
+
+        private void ChangeTheme(string theme)
+        {
+            _data.Theme = theme;
+            _palette = ThemeHelper.Resolve(theme);
+            ApplyTheme();
+            UpdateTabColors();
+            UpdateCopyButtons();
+            SaveData();
+        }
+
+        private void ToggleTopMost()
+        {
+            _data.TopMost = !_data.TopMost;
+            TopMost = _data.TopMost;
+            SaveData();
+        }
+
+        private void OpenDataFolder()
+        {
+            try
+            {
+                Directory.CreateDirectory(_store.DirectoryPath);
+                Process.Start("explorer.exe", "\"" + _store.DirectoryPath + "\"");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "フォルダを開けませんでした。\n\n" + ex.Message, "コピペット", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void ApplyTheme()
+        {
+            Palette p = _palette;
+            BackColor = p.Back;
+            ForeColor = p.Text;
+            panelTabs.BackColor = p.Back;
+            labelStatus.ForeColor = p.SubText;
+
+            foreach (Button b in _copyButtons)
+            {
+                b.BackColor = p.ButtonBack;
+                b.FlatAppearance.BorderColor = p.Border;
+                b.FlatAppearance.BorderSize = 1;
+                b.FlatAppearance.MouseOverBackColor = p.ButtonHover;
+                b.FlatAppearance.MouseDownBackColor = p.ButtonPressed;
+            }
+
+            buttonSettings.BackColor = p.Back;
+            buttonSettings.ForeColor = p.SubText;
+            buttonSettings.FlatAppearance.BorderSize = 0;
+            buttonSettings.FlatAppearance.MouseOverBackColor = p.ButtonHover;
+            buttonSettings.FlatAppearance.MouseDownBackColor = p.ButtonPressed;
+
+            var renderer = new ThemedMenuRenderer(p);
+            _tabMenu.Renderer = renderer;
+            _settingsMenu.Renderer = renderer;
+            foreach (ToolStripItem item in _settingsMenu.Items)
+            {
+                var menuItem = item as ToolStripMenuItem;
+                if (menuItem != null && menuItem.HasDropDownItems) menuItem.DropDown.Renderer = renderer;
+            }
+
+            ThemeHelper.ApplyTitleBar(this, p.IsDark);
+            Invalidate(true);
+        }
+
+        private void ShowStatus(string message)
+        {
+            labelStatus.Text = message;
+            if (_statusTimer == null)
+            {
+                _statusTimer = new Timer(components) { Interval = StatusDisplayMs };
+                _statusTimer.Tick += (s, e) =>
+                {
+                    _statusTimer.Stop();
+                    labelStatus.Text = string.Empty;
+                };
+            }
+            _statusTimer.Stop();
+            _statusTimer.Start();
+        }
+
+        private void SaveData()
+        {
+            try
+            {
+                _store.Save(_data);
+                _savedLastTab = _data.LastTab;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "保存できませんでした。\n\n" + _store.FilePath + "\n\n" + ex.Message,
+                    "コピペット", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // ツールチップ（ダークでも読めるように自前で描く）
+        // ------------------------------------------------------------------
+
+        private const TextFormatFlags ToolTipFlags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.Top;
+
+        private int ToolTipPadding
+        {
+            get { return (int)Math.Round(6 * UiScale); }
+        }
+
+        /// <summary>
+        /// 画面の拡大率（100%=1.0）。デザイン時に高さ64pxで置いた panelTabs が
+        /// 自動スケーリング後に何倍になったかで求める。
+        /// </summary>
+        private float UiScale
+        {
+            get { return Math.Max(1f, panelTabs.Height / 64f); }
+        }
+
+        private void OnToolTipPopup(object sender, PopupEventArgs e)
+        {
+            string text = toolTip.GetToolTip(e.AssociatedControl);
+            int maxWidth = (int)Math.Round(360 * UiScale);
+            Size size = TextRenderer.MeasureText(text, Font, new Size(maxWidth, 0), ToolTipFlags);
+            e.ToolTipSize = new Size(size.Width + ToolTipPadding * 2, size.Height + ToolTipPadding * 2);
+        }
+
+        private void OnToolTipDraw(object sender, DrawToolTipEventArgs e)
+        {
+            using (var back = new SolidBrush(_palette.ToolTipBack))
+            using (var border = new Pen(_palette.Border))
+            {
+                e.Graphics.FillRectangle(back, e.Bounds);
+                e.Graphics.DrawRectangle(border, new Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width - 1, e.Bounds.Height - 1));
+            }
+            Rectangle textBounds = Rectangle.Inflate(e.Bounds, -ToolTipPadding, -ToolTipPadding);
+            TextRenderer.DrawText(e.Graphics, e.ToolTipText, Font, textBounds, _palette.Text, ToolTipFlags);
+        }
+    }
+
+    /// <summary>フォームの破棄時にフォントも破棄されるようにするための入れ物。</summary>
+    internal sealed class FontHolder : System.ComponentModel.Component
+    {
+        private readonly Font _font;
+
+        public FontHolder(Font font)
+        {
+            _font = font;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _font.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+}

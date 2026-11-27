@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>Copipet</RootNamespace>
+    <AssemblyName>Copipet</AssemblyName>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Version>1.0.0</Version>
+    <Product>コピペット</Product>
+    <AssemblyTitle>コピペット</AssemblyTitle>
+    <Description>定型文をワンクリックでコピーするツール</Description>
+    <Copyright>Copyright (c) 2026 siroco-kyon</Copyright>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Linux/CI でも .NET Framework 4.8 向けにビルドできるようにする参照アセンブリ（実行時には不要） -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Forms\MainForm.cs" SubType="Form" />
+    <Compile Update="Forms\MainForm.Designer.cs" DependentUpon="MainForm.cs" />
+    <Compile Update="Forms\ItemEditForm.cs" SubType="Form" />
+    <Compile Update="Forms\ItemEditForm.Designer.cs" DependentUpon="ItemEditForm.cs" />
+    <Compile Update="Forms\TabNameForm.cs" SubType="Form" />
+    <Compile Update="Forms\TabNameForm.Designer.cs" DependentUpon="TabNameForm.cs" />
+  </ItemGroup>
+
+</Project>
