@@ -9,7 +9,7 @@ namespace Copipet.Models
     {
         public const int CurrentVersion = 1;
         public const int MaxTabs = 8;
-        public const int ItemsPerTab = 10;
+        public const int MaxItemsPerTab = 20;
         public const int InitialTabs = 3;
         public const int MaxTitleLength = 30;
         public const int MaxTabNameLength = 8;
@@ -93,9 +93,7 @@ namespace Copipet.Models
 
         public static TabData Create(string name)
         {
-            var tab = new TabData { Name = name, Items = new List<ItemData>() };
-            for (int i = 0; i < AppData.ItemsPerTab; i++) tab.Items.Add(new ItemData());
-            return tab;
+            return new TabData { Name = name, Items = new List<ItemData>() };
         }
 
         public int RegisteredCount
@@ -120,8 +118,10 @@ namespace Copipet.Models
                 if (Items[i] == null) Items[i] = new ItemData();
                 Items[i].Normalize();
             }
-            if (Items.Count > AppData.ItemsPerTab) Items.RemoveRange(AppData.ItemsPerTab, Items.Count - AppData.ItemsPerTab);
-            while (Items.Count < AppData.ItemsPerTab) Items.Add(new ItemData());
+            if (Items.Count > AppData.MaxItemsPerTab) Items.RemoveRange(AppData.MaxItemsPerTab, Items.Count - AppData.MaxItemsPerTab);
+
+            // 末尾に並んだ「タイトルも内容も空」の項目は詰める（途中の空きは位置を保つため残す）
+            while (Items.Count > 0 && Items[Items.Count - 1].IsBlank) Items.RemoveAt(Items.Count - 1);
         }
     }
 
@@ -144,6 +144,12 @@ namespace Copipet.Models
         public bool IsEmpty
         {
             get { return string.IsNullOrEmpty(Content); }
+        }
+
+        /// <summary>タイトルも内容も空。</summary>
+        public bool IsBlank
+        {
+            get { return string.IsNullOrEmpty(Content) && string.IsNullOrEmpty(Title); }
         }
 
         public void Normalize()

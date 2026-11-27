@@ -9,7 +9,7 @@ using Copipet.Services;
 
 namespace Copipet.Forms
 {
-    /// <summary>トップ画面。タブ（最大8つ）と、タブごとに10個のコピーボタンを表示する。</summary>
+    /// <summary>トップ画面。タブ（最大8つ）と、タブごとのコピーボタン（0〜20件）を表示する。</summary>
     public partial class MainForm : Form
     {
         private const int StatusDisplayMs = 2000;
@@ -18,7 +18,11 @@ namespace Copipet.Forms
         private readonly DataStore _store;
         private readonly AppData _data;
         private readonly string _startupNotice;
-        private readonly Button[] _copyButtons;
+        private readonly List<Button> _itemButtons = new List<Button>();
+        private Button _addItemButton;
+        private ContextMenuStrip _itemMenu;
+        private ToolStripMenuItem _menuItemEdit, _menuItemMovePrev, _menuItemMoveNext, _menuItemDelete;
+        private int _menuItemIndex = -1;
         private readonly List<Button> _tabButtons = new List<Button>();
         private Button _addTabButton;
         private ContextMenuStrip _tabMenu;
@@ -46,17 +50,16 @@ namespace Copipet.Forms
             _currentTab = data.LastTab;
             _savedLastTab = data.LastTab;
 
-            _copyButtons = new[]
+            _addItemButton = new Button
             {
-                copyButton1, copyButton2, copyButton3, copyButton4, copyButton5,
-                copyButton6, copyButton7, copyButton8, copyButton9, copyButton10
+                Text = "＋ 追加",
+                FlatStyle = FlatStyle.Flat,
+                UseVisualStyleBackColor = false,
+                TabIndex = 1000,
             };
-            for (int i = 0; i < _copyButtons.Length; i++)
-            {
-                _copyButtons[i].Tag = i;
-                _copyButtons[i].Click += OnCopyButtonClick;
-                _copyButtons[i].MouseUp += OnCopyButtonMouseUp;
-            }
+            _addItemButton.Click += (s, e) => AddItem();
+            panelItems.Controls.Add(_addItemButton);
+            panelItems.HandleCreated += (s, e) => ThemeHelper.ApplyControlTheme(panelItems, _palette.IsDark);
 
             try
             {
@@ -231,6 +234,7 @@ namespace Copipet.Forms
         {
             if (index < 0) index = 0;
             if (index >= _data.Tabs.Count) index = _data.Tabs.Count - 1;
+            if (index != _currentTab) panelItems.AutoScrollPosition = Point.Empty;
             _currentTab = index;
             _data.LastTab = index;
             UpdateTabColors();
@@ -326,16 +330,45 @@ namespace Copipet.Forms
         }
 
         // ------------------------------------------------------------------
-        // コピーボタン
+        // コピーボタン（タブごとに0〜20件。ボタン欄だけが縦にスクロールする）
         // ------------------------------------------------------------------
 
+        /// <summary>今のタブの件数に合わせてボタンを用意し、表示と配置を更新する。</summary>
         private void UpdateCopyButtons()
         {
             TabData tab = _data.Tabs[_currentTab];
-            for (int i = 0; i < _copyButtons.Length; i++)
+            panelItems.SuspendLayout();
+
+            // ボタンは必要になった数だけ作り、以後は使い回す
+            while (_itemButtons.Count < tab.Items.Count)
             {
+                var button = new Button
+                {
+                    Tag = _itemButtons.Count,
+                    TabIndex = _itemButtons.Count,
+                    AutoEllipsis = true,
+                    UseMnemonic = false,
+                    FlatStyle = FlatStyle.Flat,
+                    UseVisualStyleBackColor = false,
+                };
+                button.Click += OnCopyButtonClick;
+                button.MouseUp += OnCopyButtonMouseUp;
+                StyleItemButton(button);
+                _itemButtons.Add(button);
+                panelItems.Controls.Add(button);
+            }
+
+            for (int i = 0; i < _itemButtons.Count; i++)
+            {
+                Button b = _itemButtons[i];
+                if (i >= tab.Items.Count)
+                {
+                    b.Visible = false;
+                    toolTip.SetToolTip(b, null);
+                    continue;
+                }
+
                 ItemData item = tab.Items[i];
-                Button b = _copyButtons[i];
                 if (item.IsEmpty)
                 {
                     b.Text = item.Title.Length > 0 ? item.Title : "（未登録）";
@@ -348,7 +381,52 @@ namespace Copipet.Forms
                     b.ForeColor = _palette.Text;
                     toolTip.SetToolTip(b, MakePreview(item.Content));
                 }
+                b.Visible = true;
             }
+
+            int remaining = AppData.MaxItemsPerTab - tab.Items.Count;
+            _addItemButton.Visible = remaining > 0;
+            _addItemButton.Text = tab.Items.Count == 0 ? "＋ 追加（最初の1件を登録）" : "＋ 追加";
+            toolTip.SetToolTip(_addItemButton, "追加（あと" + remaining + "件）");
+
+            panelItems.ResumeLayout(false);
+            LayoutItemButtons();
+        }
+
+        /// <summary>ボタンを並べる。2列は左→右、上→下の順。入りきらないときは縦スクロールバーの分だけ幅を詰める。</summary>
+        private void LayoutItemButtons()
+        {
+            TabData tab = _data.Tabs[_currentTab];
+            LayoutSpec l = _layout;
+            int count = tab.Items.Count + (_addItemButton.Visible ? 1 : 0);
+            int columns = l.ButtonColumns;
+            int rows = (count + columns - 1) / columns;
+            int gap = S(l.Gap);
+            int height = S(l.ButtonHeight);
+            int contentHeight = rows * (height + gap) - gap;
+            bool needScroll = contentHeight > panelItems.Height;
+            int available = panelItems.Width - (needScroll ? SystemInformation.VerticalScrollBarWidth + S(2) : 0);
+            int width = (available - gap * (columns - 1)) / columns;
+            int offsetY = panelItems.AutoScrollPosition.Y;
+
+            panelItems.SuspendLayout();
+            for (int i = 0; i < count; i++)
+            {
+                Button b = i < tab.Items.Count ? _itemButtons[i] : _addItemButton;
+                int col = i % columns;
+                int row = i / columns;
+                b.SetBounds(col * (width + gap), offsetY + row * (height + gap), width, height);
+            }
+            panelItems.ResumeLayout(true);
+        }
+
+        private void StyleItemButton(Button b)
+        {
+            b.BackColor = _palette.ButtonBack;
+            b.FlatAppearance.BorderColor = _palette.Border;
+            b.FlatAppearance.BorderSize = 1;
+            b.FlatAppearance.MouseOverBackColor = _palette.ButtonHover;
+            b.FlatAppearance.MouseDownBackColor = _palette.ButtonPressed;
         }
 
         private static string MakePreview(string content)
@@ -383,10 +461,13 @@ namespace Copipet.Forms
         private void OnCopyButtonMouseUp(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Right) return;
-            OpenItemEditor((int)((Button)sender).Tag);
+            var button = (Button)sender;
+            _menuItemIndex = (int)button.Tag;
+            _itemMenu.Show(button, e.Location);
         }
 
-        private void OpenItemEditor(int index)
+        /// <summary>編集画面を開く。保存したら true。</summary>
+        private bool OpenItemEditor(int index)
         {
             TabData tab = _data.Tabs[_currentTab];
             ItemData item = tab.Items[index];
@@ -394,10 +475,65 @@ namespace Copipet.Forms
 
             using (var form = new ItemEditForm(caption, item.Title, item.Content, _palette))
             {
-                if (form.ShowDialog(this) != DialogResult.OK) return;
+                if (form.ShowDialog(this) != DialogResult.OK) return false;
                 item.Title = form.ItemTitle;
                 item.Content = form.ItemContent;
             }
+            UpdateCopyButtons();
+            SaveData();
+            return true;
+        }
+
+        /// <summary>末尾に1件追加して編集画面を開く。戻るを押したか、空のまま保存したら追加を取り消す。</summary>
+        private void AddItem()
+        {
+            TabData tab = _data.Tabs[_currentTab];
+            if (tab.Items.Count >= AppData.MaxItemsPerTab) return;
+
+            tab.Items.Add(new ItemData());
+            int index = tab.Items.Count - 1;
+            UpdateCopyButtons();
+            panelItems.ScrollControlIntoView(_itemButtons[index]);
+
+            bool saved = OpenItemEditor(index);
+            if (!saved || tab.Items[index].IsBlank)
+            {
+                tab.Items.RemoveAt(index);
+                UpdateCopyButtons();
+                if (saved) SaveData();
+            }
+        }
+
+        private void MoveItem(int index, int offset)
+        {
+            List<ItemData> items = _data.Tabs[_currentTab].Items;
+            int target = index + offset;
+            if (index < 0 || target < 0 || target >= items.Count) return;
+
+            ItemData tmp = items[index];
+            items[index] = items[target];
+            items[target] = tmp;
+            UpdateCopyButtons();
+            SaveData();
+        }
+
+        private void DeleteItem(int index)
+        {
+            List<ItemData> items = _data.Tabs[_currentTab].Items;
+            if (index < 0 || index >= items.Count) return;
+            ItemData item = items[index];
+
+            if (!item.IsBlank)
+            {
+                string name = item.Title.Length > 0 ? item.Title : "（無題）";
+                if (MessageBox.Show(this, "「" + name + "」を削除します。よろしいですか？", "削除",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
+            items.RemoveAt(index);
             UpdateCopyButtons();
             SaveData();
         }
@@ -419,6 +555,22 @@ namespace Copipet.Forms
                 _menuMoveLeft.Enabled = _menuTabIndex > 0;
                 _menuMoveRight.Enabled = _menuTabIndex < _data.Tabs.Count - 1;
                 _menuDelete.Enabled = _data.Tabs.Count > 1;
+            };
+
+            _menuItemEdit = new ToolStripMenuItem("編集", null, (s, e) => OpenItemEditor(_menuItemIndex));
+            _menuItemEdit.Font = new Font(_menuItemEdit.Font, FontStyle.Bold);
+            _menuItemMovePrev = new ToolStripMenuItem("前へ移動", null, (s, e) => MoveItem(_menuItemIndex, -1));
+            _menuItemMoveNext = new ToolStripMenuItem("後ろへ移動", null, (s, e) => MoveItem(_menuItemIndex, +1));
+            _menuItemDelete = new ToolStripMenuItem("削除", null, (s, e) => DeleteItem(_menuItemIndex));
+            _itemMenu = new ContextMenuStrip(components);
+            _itemMenu.Items.AddRange(new ToolStripItem[] { _menuItemEdit, _menuItemMovePrev, _menuItemMoveNext, new ToolStripSeparator(), _menuItemDelete });
+            _itemMenu.Opening += (s, e) =>
+            {
+                bool oneColumn = _layout.ButtonColumns == 1;
+                _menuItemMovePrev.Text = oneColumn ? "上へ移動" : "前へ移動";
+                _menuItemMoveNext.Text = oneColumn ? "下へ移動" : "後ろへ移動";
+                _menuItemMovePrev.Enabled = _menuItemIndex > 0;
+                _menuItemMoveNext.Enabled = _menuItemIndex < _data.Tabs[_currentTab].Items.Count - 1;
             };
 
             _menuThemeAuto = new ToolStripMenuItem("Windowsの設定に合わせる", null, (s, e) => ChangeTheme(AppData.ThemeAuto));
@@ -476,19 +628,10 @@ namespace Copipet.Forms
             panelTabs.Bounds = Scaled(l.Margin, l.Margin, l.ContentWidth, l.TabAreaHeight);
 
             int top = l.Margin + l.TabAreaHeight + l.Margin;
-            int buttonWidth = (l.ContentWidth - l.Gap * (l.ButtonColumns - 1)) / l.ButtonColumns;
-            int rowsPerColumn = _copyButtons.Length / l.ButtonColumns;
-            for (int i = 0; i < _copyButtons.Length; i++)
-            {
-                int col = i / rowsPerColumn;   // 左の列が No.1〜、右の列が続き
-                int row = i % rowsPerColumn;
-                _copyButtons[i].Bounds = Scaled(
-                    l.Margin + col * (buttonWidth + l.Gap),
-                    top + row * (l.ButtonHeight + l.Gap),
-                    buttonWidth, l.ButtonHeight);
-            }
+            int viewport = l.VisibleRows * (l.ButtonHeight + l.Gap) - l.Gap;
+            panelItems.Bounds = Scaled(l.Margin, top, l.ContentWidth, viewport);
 
-            int statusTop = top + rowsPerColumn * (l.ButtonHeight + l.Gap) - l.Gap + 10;
+            int statusTop = top + viewport + 10;
             const int settingsWidth = 32, barHeight = 28;
             labelStatus.Bounds = Scaled(l.Margin, statusTop, l.ContentWidth - settingsWidth - 8, barHeight);
             buttonSettings.Bounds = Scaled(l.Margin + l.ContentWidth - settingsWidth, statusTop, settingsWidth, barHeight);
@@ -496,6 +639,7 @@ namespace Copipet.Forms
             ClientSize = new Size(S(l.Margin * 2 + l.ContentWidth), S(statusTop + barHeight + 10));
             ResumeLayout(true);
             LayoutTabButtons();
+            LayoutItemButtons();
 
             if (center) CenterToScreen();
             else KeepOnScreen();
@@ -565,14 +709,12 @@ namespace Copipet.Forms
             panelTabs.BackColor = p.Back;
             labelStatus.ForeColor = p.SubText;
 
-            foreach (Button b in _copyButtons)
-            {
-                b.BackColor = p.ButtonBack;
-                b.FlatAppearance.BorderColor = p.Border;
-                b.FlatAppearance.BorderSize = 1;
-                b.FlatAppearance.MouseOverBackColor = p.ButtonHover;
-                b.FlatAppearance.MouseDownBackColor = p.ButtonPressed;
-            }
+            panelItems.BackColor = p.Back;
+            foreach (Button b in _itemButtons) StyleItemButton(b);
+            StyleItemButton(_addItemButton);
+            _addItemButton.BackColor = p.Back;
+            _addItemButton.ForeColor = p.SubText;
+            ThemeHelper.ApplyControlTheme(panelItems, p.IsDark);
 
             buttonSettings.BackColor = p.Back;
             buttonSettings.ForeColor = p.SubText;
@@ -582,6 +724,7 @@ namespace Copipet.Forms
 
             var renderer = new ThemedMenuRenderer(p);
             _tabMenu.Renderer = renderer;
+            _itemMenu.Renderer = renderer;
             _settingsMenu.Renderer = renderer;
             foreach (ToolStripItem item in _settingsMenu.Items)
             {
@@ -667,20 +810,23 @@ namespace Copipet.Forms
         public int ButtonColumns { get; private set; }
         public int ButtonHeight { get; private set; }
 
-        /// <summary>2列（横長）：タブ4つ×2段、ボタン2列×5段。</summary>
+        /// <summary>スクロールせずに見える行数。</summary>
+        public int VisibleRows { get; private set; }
+
+        /// <summary>2列（横長）：タブ4つ×2段、ボタン2列（5段ぶん表示）。</summary>
         public static readonly LayoutSpec TwoColumns = new LayoutSpec
         {
             Margin = 12, Gap = 6, ContentWidth = 446,
             TabColumns = 4, TabRows = 2, TabAreaHeight = 64,
-            ButtonColumns = 2, ButtonHeight = 44,
+            ButtonColumns = 2, ButtonHeight = 44, VisibleRows = 5,
         };
 
-        /// <summary>1列（縦長）：タブ2つ×4段、ボタン1列×10段。</summary>
+        /// <summary>1列（縦長）：タブ2つ×4段、ボタン1列（10段ぶん表示）。</summary>
         public static readonly LayoutSpec OneColumn = new LayoutSpec
         {
             Margin = 12, Gap = 6, ContentWidth = 248,
             TabColumns = 2, TabRows = 4, TabAreaHeight = 134,
-            ButtonColumns = 1, ButtonHeight = 36,
+            ButtonColumns = 1, ButtonHeight = 36, VisibleRows = 10,
         };
 
         public static LayoutSpec For(string layout)
