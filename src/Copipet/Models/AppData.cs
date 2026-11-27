@@ -7,9 +7,10 @@ namespace Copipet.Models
     [DataContract]
     internal sealed class AppData
     {
-        public const int CurrentVersion = 1;
+        public const int CurrentVersion = 2;
         public const int MaxTabs = 8;
         public const int MaxItemsPerTab = 20;
+        public const int InitialItemsPerTab = 10;
         public const int InitialTabs = 3;
         public const int MaxTitleLength = 30;
         public const int MaxTabNameLength = 8;
@@ -65,6 +66,8 @@ namespace Copipet.Models
         /// <summary>読み込んだデータの欠けや範囲外の値を補正する。</summary>
         public void Normalize()
         {
+            // version 1 以前（空の項目を詰めていた版）のデータは、各タブを10件まで空で埋める
+            bool padTabs = Version < 2;
             Version = CurrentVersion;
             if (Tabs == null) Tabs = new List<TabData>();
             Tabs.RemoveAll(t => t == null);
@@ -74,6 +77,7 @@ namespace Copipet.Models
             for (int i = 0; i < Tabs.Count; i++)
             {
                 Tabs[i].Normalize(i);
+                if (padTabs) Tabs[i].PadToInitial();
             }
 
             if (LastTab < 0 || LastTab >= Tabs.Count) LastTab = 0;
@@ -91,9 +95,18 @@ namespace Copipet.Models
         [DataMember(Name = "items", Order = 1)]
         public List<ItemData> Items { get; set; }
 
+        /// <summary>空の項目を10件持ったタブを作る。</summary>
         public static TabData Create(string name)
         {
-            return new TabData { Name = name, Items = new List<ItemData>() };
+            var tab = new TabData { Name = name, Items = new List<ItemData>() };
+            tab.PadToInitial();
+            return tab;
+        }
+
+        /// <summary>10件に満たなければ空の項目で埋める。</summary>
+        public void PadToInitial()
+        {
+            while (Items.Count < AppData.InitialItemsPerTab) Items.Add(new ItemData());
         }
 
         public int RegisteredCount
@@ -120,8 +133,6 @@ namespace Copipet.Models
             }
             if (Items.Count > AppData.MaxItemsPerTab) Items.RemoveRange(AppData.MaxItemsPerTab, Items.Count - AppData.MaxItemsPerTab);
 
-            // 末尾に並んだ「タイトルも内容も空」の項目は詰める（途中の空きは位置を保つため残す）
-            while (Items.Count > 0 && Items[Items.Count - 1].IsBlank) Items.RemoveAt(Items.Count - 1);
         }
     }
 

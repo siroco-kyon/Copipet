@@ -914,20 +914,20 @@ namespace Copipet.Forms
         /// <summary>スクロールせずに見える行数。</summary>
         public int VisibleRows { get; private set; }
 
-        /// <summary>2列（横長）：タブ4つ×2段、ボタン2列（5段ぶん表示）。</summary>
+        /// <summary>2列（横長）：タブ4つ×2段、ボタン2列（6段ぶん表示＝空10件と「＋ 追加」がスクロールなしで入る）。</summary>
         public static readonly LayoutSpec TwoColumns = new LayoutSpec
         {
             Margin = 12, Gap = 6, ContentWidth = 446,
             TabColumns = 4, TabRows = 2, TabAreaHeight = 64,
-            ButtonColumns = 2, ButtonHeight = 44, VisibleRows = 5,
+            ButtonColumns = 2, ButtonHeight = 44, VisibleRows = 6,
         };
 
-        /// <summary>1列（縦長）：タブ2つ×4段、ボタン1列（10段ぶん表示）。</summary>
+        /// <summary>1列（縦長）：タブ2つ×4段、ボタン1列（11段ぶん表示＝空10件と「＋ 追加」がスクロールなしで入る）。</summary>
         public static readonly LayoutSpec OneColumn = new LayoutSpec
         {
             Margin = 12, Gap = 6, ContentWidth = 248,
             TabColumns = 2, TabRows = 4, TabAreaHeight = 134,
-            ButtonColumns = 1, ButtonHeight = 36, VisibleRows = 10,
+            ButtonColumns = 1, ButtonHeight = 34, VisibleRows = 11,
         };
 
         public static LayoutSpec For(string layout)
