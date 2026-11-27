@@ -21,13 +21,17 @@ namespace Copipet.Forms
         private readonly List<Button> _itemButtons = new List<Button>();
         private Button _addItemButton;
         private ContextMenuStrip _itemMenu;
-        private ToolStripMenuItem _menuItemEdit, _menuItemMovePrev, _menuItemMoveNext, _menuItemDelete;
+        private ToolStripMenuItem _menuItemEdit, _menuItemDelete;
+        private DragReorder _itemDrag;
+        private DragReorder _tabDrag;
+        private bool _editMode;
+        private int _itemCellWidth, _itemCellHeight, _tabCellWidth, _tabCellHeight;
         private int _menuItemIndex = -1;
         private readonly List<Button> _tabButtons = new List<Button>();
         private Button _addTabButton;
         private ContextMenuStrip _tabMenu;
         private ContextMenuStrip _settingsMenu;
-        private ToolStripMenuItem _menuRename, _menuMoveLeft, _menuMoveRight, _menuDelete;
+        private ToolStripMenuItem _menuRename, _menuDelete;
         private ToolStripMenuItem _menuThemeAuto, _menuThemeLight, _menuThemeDark, _menuTopMost;
         private ToolStripMenuItem _menuLayoutTwo, _menuLayoutOne;
         private LayoutSpec _layout = LayoutSpec.TwoColumns;
@@ -80,6 +84,16 @@ namespace Copipet.Forms
             components.Add(new FontHolder(_tabFont));
             components.Add(new FontHolder(_tabFontBold));
 
+            _itemDrag = new DragReorder(panelItems, c => (int)c.Tag, HitTestItem, MoveItemTo, OnItemDragStateChanged);
+            _tabDrag = new DragReorder(panelTabs, c => (int)c.Tag, HitTestTab, MoveTabTo, OnTabDragStateChanged);
+            Disposed += (s, e) =>
+            {
+                _itemDrag.Dispose();
+                _tabDrag.Dispose();
+            };
+            buttonEditMode.Click += (s, e) => SetEditMode(!_editMode);
+            toolTip.SetToolTip(buttonEditMode, "編集モード：ドラッグで並べ替え、クリックで編集（Escで終了）");
+
             BuildMenus();
             TopMost = _data.TopMost;
             _palette = ThemeHelper.Resolve(_data.Theme);
@@ -94,6 +108,8 @@ namespace Copipet.Forms
             base.OnLoad(e);
             // 自動スケーリングが済んだ後で、現在の拡大率を基に配置する
             _scale = MeasureScale();
+            _itemDrag.ScrollEdge = S(24);
+            _itemDrag.ScrollStep = S(12);
             ApplyLayout(true);
         }
 
@@ -139,6 +155,7 @@ namespace Copipet.Forms
             foreach (Button b in _tabButtons)
             {
                 toolTip.SetToolTip(b, null);
+                _tabDrag.Detach(b);
                 panelTabs.Controls.Remove(b);
                 b.Dispose();
             }
@@ -160,6 +177,7 @@ namespace Copipet.Forms
                 toolTip.SetToolTip(button, _data.Tabs[i].Name);
                 button.Click += OnTabButtonClick;
                 button.MouseUp += OnTabButtonMouseUp;
+                _tabDrag.Attach(button);
                 _tabButtons.Add(button);
                 panelTabs.Controls.Add(button);
             }
@@ -194,6 +212,8 @@ namespace Copipet.Forms
             int gap = (int)Math.Round(6 * _scale);
             int width = (panelTabs.ClientSize.Width - gap * (columns - 1)) / columns;
             int height = (panelTabs.ClientSize.Height - gap * (rows - 1)) / rows;
+            _tabCellWidth = width + gap;
+            _tabCellHeight = height + gap;
 
             for (int slot = 0; slot <= _tabButtons.Count && slot < columns * rows; slot++)
             {
@@ -219,6 +239,12 @@ namespace Copipet.Forms
                 Color hoverTarget = p.IsDark ? Color.White : Color.Black;
                 b.FlatAppearance.MouseOverBackColor = selected ? back : Palette.Blend(back, hoverTarget, 0.12);
                 b.FlatAppearance.MouseDownBackColor = Palette.Blend(back, hoverTarget, 0.2);
+
+                // 編集モード中は枠を付けて「動かせる」ことを示し、ドラッグ中のタブは色を変える
+                bool dragging = i == _tabDrag.DraggingIndex;
+                b.FlatAppearance.BorderSize = _editMode ? (dragging ? 2 : 1) : 0;
+                b.FlatAppearance.BorderColor = dragging ? p.Text : p.Accent;
+                b.Cursor = _editMode ? Cursors.SizeAll : Cursors.Default;
             }
             if (_addTabButton != null)
             {
@@ -243,6 +269,7 @@ namespace Copipet.Forms
 
         private void OnTabButtonClick(object sender, EventArgs e)
         {
+            if (_tabDrag.ConsumeClick()) return;
             ShowTab((int)((Button)sender).Tag);
         }
 
@@ -284,26 +311,40 @@ namespace Copipet.Forms
             SaveData();
         }
 
-        private void MoveTab(int index, int offset)
+        /// <summary>入れ物内の座標から、タブの移動先の位置を求める。</summary>
+        private int HitTestTab(Point p)
         {
-            int target = index + offset;
-            if (target < 0 || target >= _data.Tabs.Count) return;
+            int count = _data.Tabs.Count;
+            if (count == 0 || _tabCellWidth <= 0 || _tabCellHeight <= 0) return -1;
+            int columns = _layout.TabColumns;
+            int col = Math.Max(0, Math.Min(columns - 1, p.X / _tabCellWidth));
+            int row = Math.Max(0, Math.Min(_layout.TabRows - 1, p.Y / _tabCellHeight));
+            return Math.Min(count - 1, row * columns + col);
+        }
 
-            TabData tmp = _data.Tabs[index];
-            _data.Tabs[index] = _data.Tabs[target];
-            _data.Tabs[target] = tmp;
-
-            // 選択中のタブを動かしたときは、選択も一緒に動かす
-            if (_currentTab == index) _currentTab = target;
-            else if (_currentTab == target) _currentTab = index;
+        /// <summary>タブを from から to へ移動する（間のタブは1つずつずれる）。選択中のタブは選択されたまま。</summary>
+        private void MoveTabTo(int from, int to)
+        {
+            if (from == to || from < 0 || to < 0 || from >= _data.Tabs.Count || to >= _data.Tabs.Count) return;
+            TabData selected = _data.Tabs[_currentTab];
+            TabData moving = _data.Tabs[from];
+            _data.Tabs.RemoveAt(from);
+            _data.Tabs.Insert(to, moving);
+            _currentTab = _data.Tabs.IndexOf(selected);
+            _data.LastTab = _currentTab;
 
             for (int i = 0; i < _tabButtons.Count; i++)
             {
                 _tabButtons[i].Text = _data.Tabs[i].Name;
                 toolTip.SetToolTip(_tabButtons[i], _data.Tabs[i].Name);
             }
-            ShowTab(_currentTab);
-            SaveData();
+            UpdateTabColors();
+        }
+
+        private void OnTabDragStateChanged(bool finished)
+        {
+            UpdateTabColors();
+            if (finished) SaveData();
         }
 
         private void DeleteTab(int index)
@@ -353,6 +394,7 @@ namespace Copipet.Forms
                 };
                 button.Click += OnCopyButtonClick;
                 button.MouseUp += OnCopyButtonMouseUp;
+                _itemDrag.Attach(button);
                 StyleItemButton(button);
                 _itemButtons.Add(button);
                 panelItems.Controls.Add(button);
@@ -381,6 +423,9 @@ namespace Copipet.Forms
                     b.ForeColor = _palette.Text;
                     toolTip.SetToolTip(b, MakePreview(item.Content));
                 }
+                StyleItemButton(b);
+                if (i == _itemDrag.DraggingIndex) b.BackColor = _palette.ButtonPressed;
+                b.Cursor = _editMode ? Cursors.SizeAll : Cursors.Default;
                 b.Visible = true;
             }
 
@@ -408,6 +453,8 @@ namespace Copipet.Forms
             int available = panelItems.Width - (needScroll ? SystemInformation.VerticalScrollBarWidth + S(2) : 0);
             int width = (available - gap * (columns - 1)) / columns;
             int offsetY = panelItems.AutoScrollPosition.Y;
+            _itemCellWidth = width + gap;
+            _itemCellHeight = height + gap;
 
             panelItems.SuspendLayout();
             for (int i = 0; i < count; i++)
@@ -423,7 +470,7 @@ namespace Copipet.Forms
         private void StyleItemButton(Button b)
         {
             b.BackColor = _palette.ButtonBack;
-            b.FlatAppearance.BorderColor = _palette.Border;
+            b.FlatAppearance.BorderColor = _editMode && b != _addItemButton ? _palette.Accent : _palette.Border;
             b.FlatAppearance.BorderSize = 1;
             b.FlatAppearance.MouseOverBackColor = _palette.ButtonHover;
             b.FlatAppearance.MouseDownBackColor = _palette.ButtonPressed;
@@ -438,10 +485,12 @@ namespace Copipet.Forms
 
         private void OnCopyButtonClick(object sender, EventArgs e)
         {
+            if (_itemDrag.ConsumeClick()) return;
             int index = (int)((Button)sender).Tag;
             ItemData item = _data.Tabs[_currentTab].Items[index];
 
-            if (item.IsEmpty)
+            // 編集モード中、または未登録のボタンは編集画面を開く（コピーしない）
+            if (_editMode || item.IsEmpty)
             {
                 OpenItemEditor(index);
                 return;
@@ -504,17 +553,79 @@ namespace Copipet.Forms
             }
         }
 
-        private void MoveItem(int index, int offset)
+        /// <summary>ボタン欄内の座標から、コピーボタンの移動先の位置を求める。</summary>
+        private int HitTestItem(Point p)
+        {
+            int count = _data.Tabs[_currentTab].Items.Count;
+            if (count == 0 || _itemCellWidth <= 0 || _itemCellHeight <= 0) return -1;
+            int columns = _layout.ButtonColumns;
+            int y = p.Y - panelItems.AutoScrollPosition.Y; // スクロールぶんを戻した、内容全体での座標
+            int col = Math.Max(0, Math.Min(columns - 1, p.X / _itemCellWidth));
+            int row = Math.Max(0, y / _itemCellHeight);
+            return Math.Min(count - 1, row * columns + col);
+        }
+
+        /// <summary>コピーボタンを from から to へ移動する（間の項目は1つずつずれる）。</summary>
+        private void MoveItemTo(int from, int to)
         {
             List<ItemData> items = _data.Tabs[_currentTab].Items;
-            int target = index + offset;
-            if (index < 0 || target < 0 || target >= items.Count) return;
-
-            ItemData tmp = items[index];
-            items[index] = items[target];
-            items[target] = tmp;
+            if (from == to || from < 0 || to < 0 || from >= items.Count || to >= items.Count) return;
+            ItemData moving = items[from];
+            items.RemoveAt(from);
+            items.Insert(to, moving);
             UpdateCopyButtons();
-            SaveData();
+        }
+
+        private void OnItemDragStateChanged(bool finished)
+        {
+            UpdateCopyButtons();
+            if (finished) SaveData();
+        }
+
+        /// <summary>編集モードの切り替え。編集モード中はドラッグで並べ替え、クリックで編集画面。</summary>
+        private void SetEditMode(bool on)
+        {
+            if (_editMode == on) return;
+            _itemDrag.Cancel();
+            _tabDrag.Cancel();
+            _editMode = on;
+            _itemDrag.Enabled = on;
+            _tabDrag.Enabled = on;
+
+            if (_statusTimer != null) _statusTimer.Stop();
+            labelStatus.Text = on ? "編集モード：ドラッグで並べ替え／クリックで編集" : string.Empty;
+            buttonEditMode.Text = on ? "✓ 完了" : "✎ 編集";
+            StyleEditModeButton();
+            UpdateTabColors();
+            UpdateCopyButtons();
+        }
+
+        private void StyleEditModeButton()
+        {
+            Palette p = _palette;
+            if (_editMode)
+            {
+                ThemeHelper.StyleButton(buttonEditMode, p, true);
+            }
+            else
+            {
+                buttonEditMode.BackColor = p.Back;
+                buttonEditMode.ForeColor = p.SubText;
+                buttonEditMode.FlatAppearance.BorderColor = p.Border;
+                buttonEditMode.FlatAppearance.BorderSize = 1;
+                buttonEditMode.FlatAppearance.MouseOverBackColor = p.ButtonHover;
+                buttonEditMode.FlatAppearance.MouseDownBackColor = p.ButtonPressed;
+            }
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape && _editMode)
+            {
+                SetEditMode(false);
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void DeleteItem(int index)
@@ -545,33 +656,19 @@ namespace Copipet.Forms
         private void BuildMenus()
         {
             _menuRename = new ToolStripMenuItem("名前を変更", null, (s, e) => RenameTab(_menuTabIndex));
-            _menuMoveLeft = new ToolStripMenuItem("左へ移動", null, (s, e) => MoveTab(_menuTabIndex, -1));
-            _menuMoveRight = new ToolStripMenuItem("右へ移動", null, (s, e) => MoveTab(_menuTabIndex, +1));
             _menuDelete = new ToolStripMenuItem("削除", null, (s, e) => DeleteTab(_menuTabIndex));
             _tabMenu = new ContextMenuStrip(components);
-            _tabMenu.Items.AddRange(new ToolStripItem[] { _menuRename, _menuMoveLeft, _menuMoveRight, new ToolStripSeparator(), _menuDelete });
+            _tabMenu.Items.AddRange(new ToolStripItem[] { _menuRename, new ToolStripSeparator(), _menuDelete });
             _tabMenu.Opening += (s, e) =>
             {
-                _menuMoveLeft.Enabled = _menuTabIndex > 0;
-                _menuMoveRight.Enabled = _menuTabIndex < _data.Tabs.Count - 1;
                 _menuDelete.Enabled = _data.Tabs.Count > 1;
             };
 
             _menuItemEdit = new ToolStripMenuItem("編集", null, (s, e) => OpenItemEditor(_menuItemIndex));
             _menuItemEdit.Font = new Font(_menuItemEdit.Font, FontStyle.Bold);
-            _menuItemMovePrev = new ToolStripMenuItem("前へ移動", null, (s, e) => MoveItem(_menuItemIndex, -1));
-            _menuItemMoveNext = new ToolStripMenuItem("後ろへ移動", null, (s, e) => MoveItem(_menuItemIndex, +1));
             _menuItemDelete = new ToolStripMenuItem("削除", null, (s, e) => DeleteItem(_menuItemIndex));
             _itemMenu = new ContextMenuStrip(components);
-            _itemMenu.Items.AddRange(new ToolStripItem[] { _menuItemEdit, _menuItemMovePrev, _menuItemMoveNext, new ToolStripSeparator(), _menuItemDelete });
-            _itemMenu.Opening += (s, e) =>
-            {
-                bool oneColumn = _layout.ButtonColumns == 1;
-                _menuItemMovePrev.Text = oneColumn ? "上へ移動" : "前へ移動";
-                _menuItemMoveNext.Text = oneColumn ? "下へ移動" : "後ろへ移動";
-                _menuItemMovePrev.Enabled = _menuItemIndex > 0;
-                _menuItemMoveNext.Enabled = _menuItemIndex < _data.Tabs[_currentTab].Items.Count - 1;
-            };
+            _itemMenu.Items.AddRange(new ToolStripItem[] { _menuItemEdit, new ToolStripSeparator(), _menuItemDelete });
 
             _menuThemeAuto = new ToolStripMenuItem("Windowsの設定に合わせる", null, (s, e) => ChangeTheme(AppData.ThemeAuto));
             _menuThemeLight = new ToolStripMenuItem("ライト", null, (s, e) => ChangeTheme(AppData.ThemeLight));
@@ -632,9 +729,12 @@ namespace Copipet.Forms
             panelItems.Bounds = Scaled(l.Margin, top, l.ContentWidth, viewport);
 
             int statusTop = top + viewport + 10;
-            const int settingsWidth = 32, barHeight = 28;
-            labelStatus.Bounds = Scaled(l.Margin, statusTop, l.ContentWidth - settingsWidth - 8, barHeight);
-            buttonSettings.Bounds = Scaled(l.Margin + l.ContentWidth - settingsWidth, statusTop, settingsWidth, barHeight);
+            const int settingsWidth = 32, editWidth = 72, barHeight = 28, barGap = 6;
+            int settingsLeft = l.Margin + l.ContentWidth - settingsWidth;
+            int editLeft = settingsLeft - barGap - editWidth;
+            labelStatus.Bounds = Scaled(l.Margin, statusTop, editLeft - barGap - l.Margin, barHeight);
+            buttonEditMode.Bounds = Scaled(editLeft, statusTop, editWidth, barHeight);
+            buttonSettings.Bounds = Scaled(settingsLeft, statusTop, settingsWidth, barHeight);
 
             ClientSize = new Size(S(l.Margin * 2 + l.ContentWidth), S(statusTop + barHeight + 10));
             ResumeLayout(true);
@@ -716,6 +816,7 @@ namespace Copipet.Forms
             _addItemButton.ForeColor = p.SubText;
             ThemeHelper.ApplyControlTheme(panelItems, p.IsDark);
 
+            StyleEditModeButton();
             buttonSettings.BackColor = p.Back;
             buttonSettings.ForeColor = p.SubText;
             buttonSettings.FlatAppearance.BorderSize = 0;

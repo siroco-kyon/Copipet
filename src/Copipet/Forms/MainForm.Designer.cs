@@ -27,6 +27,7 @@ namespace Copipet.Forms
             this.panelTabs = new System.Windows.Forms.Panel();
             this.panelItems = new System.Windows.Forms.Panel();
             this.labelStatus = new System.Windows.Forms.Label();
+            this.buttonEditMode = new System.Windows.Forms.Button();
             this.buttonSettings = new System.Windows.Forms.Button();
             this.toolTip = new System.Windows.Forms.ToolTip(this.components);
             this.SuspendLayout();
@@ -51,10 +52,20 @@ namespace Copipet.Forms
             this.labelStatus.AutoEllipsis = true;
             this.labelStatus.Location = new System.Drawing.Point(12, 342);
             this.labelStatus.Name = "labelStatus";
-            this.labelStatus.Size = new System.Drawing.Size(406, 28);
+            this.labelStatus.Size = new System.Drawing.Size(330, 28);
             this.labelStatus.TabIndex = 2;
             this.labelStatus.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.labelStatus.UseMnemonic = false;
+            // 
+            // buttonEditMode
+            // 
+            this.buttonEditMode.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.buttonEditMode.Location = new System.Drawing.Point(348, 342);
+            this.buttonEditMode.Name = "buttonEditMode";
+            this.buttonEditMode.Size = new System.Drawing.Size(72, 28);
+            this.buttonEditMode.TabIndex = 3;
+            this.buttonEditMode.Text = "✎ 編集";
+            this.buttonEditMode.UseVisualStyleBackColor = false;
             // 
             // buttonSettings
             // 
@@ -63,7 +74,7 @@ namespace Copipet.Forms
             this.buttonSettings.Location = new System.Drawing.Point(426, 342);
             this.buttonSettings.Name = "buttonSettings";
             this.buttonSettings.Size = new System.Drawing.Size(32, 28);
-            this.buttonSettings.TabIndex = 3;
+            this.buttonSettings.TabIndex = 4;
             this.buttonSettings.Text = "⚙";
             this.buttonSettings.UseVisualStyleBackColor = false;
             // 
@@ -82,6 +93,7 @@ namespace Copipet.Forms
             this.Controls.Add(this.panelTabs);
             this.Controls.Add(this.panelItems);
             this.Controls.Add(this.labelStatus);
+            this.Controls.Add(this.buttonEditMode);
             this.Controls.Add(this.buttonSettings);
             this.Font = new System.Drawing.Font("Yu Gothic UI", 9.75F);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
@@ -99,6 +111,7 @@ namespace Copipet.Forms
         private System.Windows.Forms.Panel panelTabs;
         private System.Windows.Forms.Panel panelItems;
         private System.Windows.Forms.Label labelStatus;
+        private System.Windows.Forms.Button buttonEditMode;
         private System.Windows.Forms.Button buttonSettings;
         private System.Windows.Forms.ToolTip toolTip;
     }
