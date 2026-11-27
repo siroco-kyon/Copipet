@@ -12,8 +12,6 @@ namespace Copipet.Forms
     /// <summary>トップ画面。タブ（最大8つ）と、タブごとに10個のコピーボタンを表示する。</summary>
     public partial class MainForm : Form
     {
-        private const int TabColumns = 4;
-        private const int TabRows = 2;
         private const int StatusDisplayMs = 2000;
         private const int PreviewLength = 100;
 
@@ -27,6 +25,9 @@ namespace Copipet.Forms
         private ContextMenuStrip _settingsMenu;
         private ToolStripMenuItem _menuRename, _menuMoveLeft, _menuMoveRight, _menuDelete;
         private ToolStripMenuItem _menuThemeAuto, _menuThemeLight, _menuThemeDark, _menuTopMost;
+        private ToolStripMenuItem _menuLayoutTwo, _menuLayoutOne;
+        private LayoutSpec _layout = LayoutSpec.TwoColumns;
+        private float _scale = 1f;
         private Timer _statusTimer;
         private Font _tabFont;
         private Font _tabFontBold;
@@ -79,9 +80,18 @@ namespace Copipet.Forms
             BuildMenus();
             TopMost = _data.TopMost;
             _palette = ThemeHelper.Resolve(_data.Theme);
+            _layout = LayoutSpec.For(_data.Layout);
             RebuildTabButtons();
             ApplyTheme();
             ShowTab(_currentTab);
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            // 自動スケーリングが済んだ後で、現在の拡大率を基に配置する
+            _scale = MeasureScale();
+            ApplyLayout(true);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -176,16 +186,18 @@ namespace Copipet.Forms
         private void LayoutTabButtons()
         {
             if (_tabButtons.Count == 0) return;
-            int gap = (int)Math.Round(6 * UiScale);
-            int width = (panelTabs.ClientSize.Width - gap * (TabColumns - 1)) / TabColumns;
-            int height = (panelTabs.ClientSize.Height - gap * (TabRows - 1)) / TabRows;
+            int columns = _layout.TabColumns;
+            int rows = _layout.TabRows;
+            int gap = (int)Math.Round(6 * _scale);
+            int width = (panelTabs.ClientSize.Width - gap * (columns - 1)) / columns;
+            int height = (panelTabs.ClientSize.Height - gap * (rows - 1)) / rows;
 
-            for (int slot = 0; slot <= _tabButtons.Count && slot < TabColumns * TabRows; slot++)
+            for (int slot = 0; slot <= _tabButtons.Count && slot < columns * rows; slot++)
             {
                 Button target = slot < _tabButtons.Count ? _tabButtons[slot] : _addTabButton;
                 if (target == null) continue;
-                int col = slot % TabColumns;
-                int row = slot / TabColumns;
+                int col = slot % columns;
+                int row = slot / columns;
                 target.SetBounds(col * (width + gap), row * (height + gap), width, height);
             }
         }
@@ -414,17 +426,23 @@ namespace Copipet.Forms
             _menuThemeDark = new ToolStripMenuItem("ダーク", null, (s, e) => ChangeTheme(AppData.ThemeDark));
             var themeMenu = new ToolStripMenuItem("テーマ");
             themeMenu.DropDownItems.AddRange(new ToolStripItem[] { _menuThemeAuto, _menuThemeLight, _menuThemeDark });
+            _menuLayoutTwo = new ToolStripMenuItem("2列（横長）", null, (s, e) => ChangeLayout(AppData.LayoutTwoColumns));
+            _menuLayoutOne = new ToolStripMenuItem("1列（縦長・幅が狭い）", null, (s, e) => ChangeLayout(AppData.LayoutOneColumn));
+            var layoutMenu = new ToolStripMenuItem("レイアウト");
+            layoutMenu.DropDownItems.AddRange(new ToolStripItem[] { _menuLayoutTwo, _menuLayoutOne });
             _menuTopMost = new ToolStripMenuItem("常に最前面に表示", null, (s, e) => ToggleTopMost());
             var openFolder = new ToolStripMenuItem("データフォルダを開く", null, (s, e) => OpenDataFolder());
 
             _settingsMenu = new ContextMenuStrip(components);
-            _settingsMenu.Items.AddRange(new ToolStripItem[] { themeMenu, _menuTopMost, new ToolStripSeparator(), openFolder });
+            _settingsMenu.Items.AddRange(new ToolStripItem[] { themeMenu, layoutMenu, _menuTopMost, new ToolStripSeparator(), openFolder });
             _settingsMenu.Opening += (s, e) =>
             {
                 _menuThemeAuto.Checked = _data.Theme == AppData.ThemeAuto;
                 _menuThemeLight.Checked = _data.Theme == AppData.ThemeLight;
                 _menuThemeDark.Checked = _data.Theme == AppData.ThemeDark;
                 _menuTopMost.Checked = _data.TopMost;
+                _menuLayoutTwo.Checked = _data.Layout == AppData.LayoutTwoColumns;
+                _menuLayoutOne.Checked = _data.Layout == AppData.LayoutOneColumn;
             };
         }
 
@@ -436,6 +454,87 @@ namespace Copipet.Forms
             UpdateTabColors();
             UpdateCopyButtons();
             SaveData();
+        }
+
+        private void ChangeLayout(string layout)
+        {
+            if (_data.Layout == layout) return;
+            _data.Layout = layout;
+            _layout = LayoutSpec.For(layout);
+            ApplyLayout(false);
+            SaveData();
+        }
+
+        /// <summary>
+        /// レイアウト（2列／1列）に合わせて部品を並べ直す。値は 100% 表示時の px で、拡大率を掛けて使う。
+        /// </summary>
+        private void ApplyLayout(bool center)
+        {
+            LayoutSpec l = _layout;
+            SuspendLayout();
+
+            panelTabs.Bounds = Scaled(l.Margin, l.Margin, l.ContentWidth, l.TabAreaHeight);
+
+            int top = l.Margin + l.TabAreaHeight + l.Margin;
+            int buttonWidth = (l.ContentWidth - l.Gap * (l.ButtonColumns - 1)) / l.ButtonColumns;
+            int rowsPerColumn = _copyButtons.Length / l.ButtonColumns;
+            for (int i = 0; i < _copyButtons.Length; i++)
+            {
+                int col = i / rowsPerColumn;   // 左の列が No.1〜、右の列が続き
+                int row = i % rowsPerColumn;
+                _copyButtons[i].Bounds = Scaled(
+                    l.Margin + col * (buttonWidth + l.Gap),
+                    top + row * (l.ButtonHeight + l.Gap),
+                    buttonWidth, l.ButtonHeight);
+            }
+
+            int statusTop = top + rowsPerColumn * (l.ButtonHeight + l.Gap) - l.Gap + 10;
+            const int settingsWidth = 32, barHeight = 28;
+            labelStatus.Bounds = Scaled(l.Margin, statusTop, l.ContentWidth - settingsWidth - 8, barHeight);
+            buttonSettings.Bounds = Scaled(l.Margin + l.ContentWidth - settingsWidth, statusTop, settingsWidth, barHeight);
+
+            ClientSize = new Size(S(l.Margin * 2 + l.ContentWidth), S(statusTop + barHeight + 10));
+            ResumeLayout(true);
+            LayoutTabButtons();
+
+            if (center) CenterToScreen();
+            else KeepOnScreen();
+        }
+
+        private void KeepOnScreen()
+        {
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            int x = Math.Max(area.Left, Math.Min(Left, area.Right - Width));
+            int y = Math.Max(area.Top, Math.Min(Top, area.Bottom - Height));
+            Location = new Point(x, y);
+        }
+
+        private int S(int value)
+        {
+            return (int)Math.Round(value * _scale);
+        }
+
+        private Rectangle Scaled(int x, int y, int width, int height)
+        {
+            return new Rectangle(S(x), S(y), S(width), S(height));
+        }
+
+        /// <summary>画面の拡大率（100%=1.0）。</summary>
+        private float MeasureScale()
+        {
+            try
+            {
+                float dpi = CurrentAutoScaleDimensions.Width;
+                if (dpi > 0) return Math.Max(1f, dpi / 96f);
+            }
+            catch (Exception)
+            {
+                // 取得できない環境では下の方法で求める
+            }
+            using (Graphics g = CreateGraphics())
+            {
+                return Math.Max(1f, g.DpiX / 96f);
+            }
         }
 
         private void ToggleTopMost()
@@ -532,22 +631,13 @@ namespace Copipet.Forms
 
         private int ToolTipPadding
         {
-            get { return (int)Math.Round(6 * UiScale); }
-        }
-
-        /// <summary>
-        /// 画面の拡大率（100%=1.0）。デザイン時に高さ64pxで置いた panelTabs が
-        /// 自動スケーリング後に何倍になったかで求める。
-        /// </summary>
-        private float UiScale
-        {
-            get { return Math.Max(1f, panelTabs.Height / 64f); }
+            get { return S(6); }
         }
 
         private void OnToolTipPopup(object sender, PopupEventArgs e)
         {
             string text = toolTip.GetToolTip(e.AssociatedControl);
-            int maxWidth = (int)Math.Round(360 * UiScale);
+            int maxWidth = S(360);
             Size size = TextRenderer.MeasureText(text, Font, new Size(maxWidth, 0), ToolTipFlags);
             e.ToolTipSize = new Size(size.Width + ToolTipPadding * 2, size.Height + ToolTipPadding * 2);
         }
@@ -562,6 +652,40 @@ namespace Copipet.Forms
             }
             Rectangle textBounds = Rectangle.Inflate(e.Bounds, -ToolTipPadding, -ToolTipPadding);
             TextRenderer.DrawText(e.Graphics, e.ToolTipText, Font, textBounds, _palette.Text, ToolTipFlags);
+        }
+    }
+
+    /// <summary>トップ画面の並べ方（値は 100% 表示時の px）。</summary>
+    internal sealed class LayoutSpec
+    {
+        public int Margin { get; private set; }
+        public int Gap { get; private set; }
+        public int ContentWidth { get; private set; }
+        public int TabColumns { get; private set; }
+        public int TabRows { get; private set; }
+        public int TabAreaHeight { get; private set; }
+        public int ButtonColumns { get; private set; }
+        public int ButtonHeight { get; private set; }
+
+        /// <summary>2列（横長）：タブ4つ×2段、ボタン2列×5段。</summary>
+        public static readonly LayoutSpec TwoColumns = new LayoutSpec
+        {
+            Margin = 12, Gap = 6, ContentWidth = 446,
+            TabColumns = 4, TabRows = 2, TabAreaHeight = 64,
+            ButtonColumns = 2, ButtonHeight = 44,
+        };
+
+        /// <summary>1列（縦長）：タブ2つ×4段、ボタン1列×10段。</summary>
+        public static readonly LayoutSpec OneColumn = new LayoutSpec
+        {
+            Margin = 12, Gap = 6, ContentWidth = 248,
+            TabColumns = 2, TabRows = 4, TabAreaHeight = 134,
+            ButtonColumns = 1, ButtonHeight = 36,
+        };
+
+        public static LayoutSpec For(string layout)
+        {
+            return layout == AppData.LayoutOneColumn ? OneColumn : TwoColumns;
         }
     }
 

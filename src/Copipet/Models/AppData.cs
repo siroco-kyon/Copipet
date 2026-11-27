@@ -18,6 +18,9 @@ namespace Copipet.Models
         public const string ThemeLight = "light";
         public const string ThemeDark = "dark";
 
+        public const string LayoutTwoColumns = "two";
+        public const string LayoutOneColumn = "one";
+
         [DataMember(Name = "version", Order = 0)]
         public int Version { get; set; }
 
@@ -30,7 +33,10 @@ namespace Copipet.Models
         [DataMember(Name = "topMost", Order = 3)]
         public bool TopMost { get; set; }
 
-        [DataMember(Name = "tabs", Order = 4)]
+        [DataMember(Name = "layout", Order = 4)]
+        public string Layout { get; set; }
+
+        [DataMember(Name = "tabs", Order = 5)]
         public List<TabData> Tabs { get; set; }
 
         public static string DefaultTabName(int index)
@@ -46,6 +52,7 @@ namespace Copipet.Models
                 LastTab = 0,
                 Theme = ThemeAuto,
                 TopMost = false,
+                Layout = LayoutTwoColumns,
                 Tabs = new List<TabData>()
             };
             for (int i = 0; i < InitialTabs; i++)
@@ -71,6 +78,7 @@ namespace Copipet.Models
 
             if (LastTab < 0 || LastTab >= Tabs.Count) LastTab = 0;
             if (Theme != ThemeLight && Theme != ThemeDark) Theme = ThemeAuto;
+            if (Layout != LayoutOneColumn) Layout = LayoutTwoColumns;
         }
     }
 
